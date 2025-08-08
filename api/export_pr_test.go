@@ -40,7 +40,10 @@ func TestIssue_ExportData(t *testing.T) {
 			outputJSON: heredoc.Doc(`
 				{
 					"milestone": {
-						"title": "The next big thing"
+						"number": 0,
+						"title": "The next big thing",
+						"description": "",
+						"dueOn": null
 					},
 					"number": 2345
 				}
@@ -72,6 +75,102 @@ func TestIssue_ExportData(t *testing.T) {
 				}
 			`),
 		},
+		{
+			name:   "project items",
+			fields: []string{"projectItems"},
+			inputJSON: heredoc.Doc(`
+				{ "projectItems": { "nodes": [
+					{
+						"id": "PVTI_id",
+						"project": {
+							"id": "PVT_id",
+							"title": "Some Project"
+						},
+						"status": {
+							"name": "Todo",
+							"optionId": "abc123"
+						}
+					}
+				] } }
+			`),
+			outputJSON: heredoc.Doc(`
+				{
+					"projectItems": [
+						{
+							"status": {
+								"optionId": "abc123",
+								"name": "Todo"
+							},
+							"title": "Some Project"
+						}
+					]
+				}
+			`),
+		},
+		{
+			name:   "linked pull requests",
+			fields: []string{"closedByPullRequestsReferences"},
+			inputJSON: heredoc.Doc(`
+				{ "closedByPullRequestsReferences": { "nodes": [
+					{
+						"id": "I_123",
+						"number": 123,
+						"url": "https://github.com/cli/cli/pull/123",
+						"repository": {
+							"id": "R_123",
+							"name": "cli",
+							"owner": {
+								"id": "O_123",
+								"login": "cli"
+							}
+						}
+					},
+					{
+						"id": "I_456",
+						"number": 456,
+						"url": "https://github.com/cli/cli/pull/456",
+						"repository": {
+							"id": "R_456",
+							"name": "cli",
+							"owner": {
+								"id": "O_456",
+								"login": "cli"
+							}
+						}
+					}
+				] } }
+			`),
+			outputJSON: heredoc.Doc(`
+				{ "closedByPullRequestsReferences": [
+					{
+						"id": "I_123",
+						"number": 123,
+						"repository": {
+							"id": "R_123",
+							"name": "cli",
+							"owner": {
+								"id": "O_123",
+								"login": "cli"
+							}
+						},
+						"url": "https://github.com/cli/cli/pull/123"
+					},
+					{
+						"id": "I_456",
+						"number": 456,
+						"repository": {
+							"id": "R_456",
+							"name": "cli",
+							"owner": {
+								"id": "O_456",
+								"login": "cli"
+							}
+						},
+						"url": "https://github.com/cli/cli/pull/456"
+					}
+				] }
+			`),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -85,34 +184,16 @@ func TestIssue_ExportData(t *testing.T) {
 			enc := json.NewEncoder(&buf)
 			enc.SetIndent("", "\t")
 			require.NoError(t, enc.Encode(exported))
-			assert.Equal(t, tt.outputJSON, buf.String())
+
+			var gotData interface{}
+			dec = json.NewDecoder(&buf)
+			require.NoError(t, dec.Decode(&gotData))
+			var expectData interface{}
+			require.NoError(t, json.Unmarshal([]byte(tt.outputJSON), &expectData))
+
+			assert.Equal(t, expectData, gotData)
 		})
 	}
-}
-
-func TestExportIssues(t *testing.T) {
-	issues := []Issue{
-		{Milestone: Milestone{Title: "hi"}},
-		{},
-	}
-	exported := ExportIssues(issues, []string{"milestone"})
-
-	buf := bytes.Buffer{}
-	enc := json.NewEncoder(&buf)
-	enc.SetIndent("", "\t")
-	require.NoError(t, enc.Encode(exported))
-	assert.Equal(t, heredoc.Doc(`
-		[
-			{
-				"milestone": {
-					"title": "hi"
-				}
-			},
-			{
-				"milestone": null
-			}
-		]
-	`), buf.String())
 }
 
 func TestPullRequest_ExportData(t *testing.T) {
@@ -144,7 +225,10 @@ func TestPullRequest_ExportData(t *testing.T) {
 			outputJSON: heredoc.Doc(`
 				{
 					"milestone": {
-						"title": "The next big thing"
+						"number": 0,
+						"title": "The next big thing",
+						"description": "",
+						"dueOn": null
 					},
 					"number": 2345
 				}
@@ -154,16 +238,24 @@ func TestPullRequest_ExportData(t *testing.T) {
 			name:   "status checks",
 			fields: []string{"statusCheckRollup"},
 			inputJSON: heredoc.Doc(`
-				{ "commits": { "nodes": [
+				{ "statusCheckRollup": { "nodes": [
 					{ "commit": { "statusCheckRollup": { "contexts": { "nodes": [
 						{
 							"__typename": "CheckRun",
 							"name": "mycheck",
+							"checkSuite": {"workflowRun": {"workflow": {"name": "myworkflow"}}},
 							"status": "COMPLETED",
 							"conclusion": "SUCCESS",
 							"startedAt": "2020-08-31T15:44:24+02:00",
 							"completedAt": "2020-08-31T15:45:24+02:00",
 							"detailsUrl": "http://example.com/details"
+						},
+						{
+							"__typename": "StatusContext",
+							"context": "mycontext",
+							"state": "SUCCESS",
+							"createdAt": "2020-08-31T15:44:24+02:00",
+							"targetUrl": "http://example.com/details"
 						}
 					] } } } }
 				] } }
@@ -174,14 +266,118 @@ func TestPullRequest_ExportData(t *testing.T) {
 						{
 							"__typename": "CheckRun",
 							"name": "mycheck",
+							"workflowName": "myworkflow",
 							"status": "COMPLETED",
 							"conclusion": "SUCCESS",
 							"startedAt": "2020-08-31T15:44:24+02:00",
 							"completedAt": "2020-08-31T15:45:24+02:00",
 							"detailsUrl": "http://example.com/details"
+						},
+						{
+							"__typename": "StatusContext",
+							"context": "mycontext",
+							"state": "SUCCESS",
+							"startedAt": "2020-08-31T15:44:24+02:00",
+							"targetUrl": "http://example.com/details"
 						}
 					]
 				}
+			`),
+		},
+		{
+			name:   "project items",
+			fields: []string{"projectItems"},
+			inputJSON: heredoc.Doc(`
+				{ "projectItems": { "nodes": [
+					{
+						"id": "PVTPR_id",
+						"project": {
+							"id": "PVT_id",
+							"title": "Some Project"
+						},
+						"status": {
+							"name": "Todo",
+							"optionId": "abc123"
+						}
+					}
+				] } }
+			`),
+			outputJSON: heredoc.Doc(`
+				{
+					"projectItems": [
+						{
+							"status": {
+								"optionId": "abc123",
+								"name": "Todo"
+							},
+							"title": "Some Project"
+						}
+					]
+				}
+			`),
+		},
+		{
+			name:   "linked issues",
+			fields: []string{"closingIssuesReferences"},
+			inputJSON: heredoc.Doc(`
+				{ "closingIssuesReferences": { "nodes": [
+					{
+						"id": "I_123",
+						"number": 123,
+						"url": "https://github.com/cli/cli/issues/123",
+						"repository": {
+							"id": "R_123",
+							"name": "cli",
+							"owner": {
+								"id": "O_123",
+								"login": "cli"
+							}
+						}
+					},
+					{
+						"id": "I_456",
+						"number": 456,
+						"url": "https://github.com/cli/cli/issues/456",
+						"repository": {
+							"id": "R_456",
+							"name": "cli",
+							"owner": {
+								"id": "O_456",
+								"login": "cli"
+							}
+						}
+					}
+				] } }
+			`),
+			outputJSON: heredoc.Doc(`
+				{ "closingIssuesReferences": [
+					{
+						"id": "I_123",
+						"number": 123,
+						"repository": {
+							"id": "R_123",
+							"name": "cli",
+							"owner": {
+							"id": "O_123",
+							"login": "cli"
+							}
+						},
+						"url": "https://github.com/cli/cli/issues/123"
+					},
+					{
+						"id": "I_456",
+						"number": 456,
+						"repository": {
+							"id": "R_456",
+							"name": "cli",
+							"owner": {
+							"id": "O_456",
+							"login": "cli"
+							}
+						},
+						"url": "https://github.com/cli/cli/issues/456"
+					}
+				] }
 			`),
 		},
 	}
@@ -197,7 +393,14 @@ func TestPullRequest_ExportData(t *testing.T) {
 			enc := json.NewEncoder(&buf)
 			enc.SetIndent("", "\t")
 			require.NoError(t, enc.Encode(exported))
-			assert.Equal(t, tt.outputJSON, buf.String())
+
+			var gotData interface{}
+			dec = json.NewDecoder(&buf)
+			require.NoError(t, dec.Decode(&gotData))
+			var expectData interface{}
+			require.NoError(t, json.Unmarshal([]byte(tt.outputJSON), &expectData))
+
+			assert.Equal(t, expectData, gotData)
 		})
 	}
 }
